@@ -518,6 +518,7 @@ static GstCaps *
 _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
     GstPadDirection direction, GstCaps * caps)
 {
+  struct DmabufUpload *dmabuf = impl;
   GstCapsFeatures *passthrough =
       gst_caps_features_from_string
       (GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
@@ -564,6 +565,9 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
   }
 
   gst_caps_features_free (passthrough);
+
+  GST_DEBUG_OBJECT (dmabuf->upload, "transformed %" GST_PTR_FORMAT " into %"
+      GST_PTR_FORMAT, caps, ret);
 
   return ret;
 }
@@ -804,6 +808,7 @@ static GstCaps *
 _direct_dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
     GstPadDirection direction, GstCaps * caps)
 {
+  struct DmabufUpload *dmabuf = impl;
   GstCapsFeatures *passthrough =
       gst_caps_features_from_string
       (GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
@@ -858,6 +863,9 @@ _direct_dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
   }
 
   gst_caps_features_free (passthrough);
+
+  GST_DEBUG_OBJECT (dmabuf->upload, "transformed %" GST_PTR_FORMAT " into %"
+      GST_PTR_FORMAT, caps, ret);
 
   return ret;
 }
