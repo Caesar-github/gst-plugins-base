@@ -611,7 +611,7 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
 {
   struct DmabufUpload *dmabuf = impl;
   GstVideoInfo *in_info = &dmabuf->upload->priv->in_info;
-  GstVideoInfo *out_info = in_info;
+  GstVideoInfo *out_info = &dmabuf->out_info;
   guint n_planes = GST_VIDEO_INFO_N_PLANES (in_info);
   GstVideoMeta *meta;
   guint n_mem;
@@ -651,13 +651,10 @@ _dma_buf_upload_accept (gpointer impl, GstBuffer * buffer, GstCaps * in_caps,
     }
   }
 
-  if (dmabuf->direct) {
-    if (out_caps != dmabuf->out_caps) {
-      dmabuf->out_caps = out_caps;
-      if (!gst_video_info_from_caps (&dmabuf->out_info, out_caps))
-        return FALSE;
-    }
-    out_info = &dmabuf->out_info;
+  if (out_caps != dmabuf->out_caps) {
+    dmabuf->out_caps = out_caps;
+    if (!gst_video_info_from_caps (out_info, out_caps))
+      return FALSE;
   }
 
   if (dmabuf->params)
