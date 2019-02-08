@@ -520,9 +520,7 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
     GstPadDirection direction, GstCaps * caps)
 {
   struct DmabufUpload *dmabuf = impl;
-  GstCapsFeatures *passthrough =
-      gst_caps_features_from_string
-      (GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
+  GstCapsFeatures *passthrough;
   GstCaps *ret;
 
   if (context) {
@@ -533,6 +531,9 @@ _dma_buf_upload_transform_caps (gpointer impl, GstGLContext * context,
     if (!gst_gl_context_check_feature (context, "EGL_KHR_image_base"))
       return NULL;
   }
+
+  passthrough = gst_caps_features_from_string
+      (GST_CAPS_FEATURE_META_GST_VIDEO_OVERLAY_COMPOSITION);
 
   if (direction == GST_PAD_SINK) {
     GstCaps *tmp;
