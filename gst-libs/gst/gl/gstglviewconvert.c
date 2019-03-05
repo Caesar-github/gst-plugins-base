@@ -1877,7 +1877,6 @@ _do_view_convert_draw (GstGLContext * context, GstGLViewConvert * viewconvert)
   GstGLFuncs *gl;
   guint out_width, out_height;
   gint out_views, i;
-  GLint viewport_dim[4] = { 0 };
   GLenum multipleRT[] = {
     GL_COLOR_ATTACHMENT0,
     GL_COLOR_ATTACHMENT1,
@@ -1913,7 +1912,6 @@ _do_view_convert_draw (GstGLContext * context, GstGLViewConvert * viewconvert)
 
   gst_gl_framebuffer_get_effective_dimensions (viewconvert->fbo, &out_width,
       &out_height);
-  gl->GetIntegerv (GL_VIEWPORT, viewport_dim);
   gl->Viewport (0, 0, out_width, out_height);
 
   gst_gl_shader_use (viewconvert->shader);
@@ -1957,8 +1955,6 @@ _do_view_convert_draw (GstGLContext * context, GstGLViewConvert * viewconvert)
     gl->DrawBuffer (GL_COLOR_ATTACHMENT0);
   /* we are done with the shader */
   gst_gl_context_clear_shader (context);
-  gl->Viewport (viewport_dim[0], viewport_dim[1], viewport_dim[2],
-      viewport_dim[3]);
   gst_gl_context_clear_framebuffer (context);
 
   return TRUE;
