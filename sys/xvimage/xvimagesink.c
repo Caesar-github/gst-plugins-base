@@ -121,6 +121,7 @@
 #include <gst/video/colorbalance.h>
 /* Helper functions */
 #include <gst/video/gstvideometa.h>
+#include <gst/allocators/gstdmabuf.h>
 
 /* Object header */
 #include "xvimagesink.h"
@@ -131,6 +132,11 @@
 
 /* for XkbKeycodeToKeysym */
 #include <X11/XKBlib.h>
+
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 GST_DEBUG_CATEGORY_EXTERN (gst_debug_xv_image_sink);
 GST_DEBUG_CATEGORY_EXTERN (CAT_PERFORMANCE);
@@ -220,6 +226,164 @@ G_DEFINE_TYPE_WITH_CODE (GstXvImageSink, gst_xv_image_sink, GST_TYPE_VIDEO_SINK,
 /*                                                               */
 /* ============================================================= */
 
+static void
+gst_xv_image_sink_check_dma_client (GstXvImageSink * xvimagesink)
+{
+  GstXvContext *context = xvimagesink->context;
+  Atom prop_atom;
+  int xv_value = 0;
+
+  if (!context->have_dma_client)
+    return;
+
+  g_mutex_lock (&context->lock);
+  prop_atom = XInternAtom (context->disp, XV_DMA_CLIENT_PROP, True);
+  if (prop_atom != None) {
+    XvGetPortAttribute (context->disp, context->xv_port_id,
+        prop_atom, &xv_value);
+  }
+  g_mutex_unlock (&context->lock);
+
+  context->have_dma_client = xv_value > 0;
+}
+
+static void
+gst_xv_image_sink_flush_dma_client (GstXvImageSink * xvimagesink)
+{
+  GstXvContext *context = xvimagesink->context;
+  Atom prop_atom;
+  int xv_value;
+
+  if (!context->have_dma_client)
+    return;
+
+  g_mutex_lock (&context->lock);
+  prop_atom = XInternAtom (context->disp, XV_DMA_CLIENT_PROP, True);
+  if (prop_atom != None) {
+    XvSetPortAttribute (context->disp, context->xv_port_id,
+        prop_atom, xvimagesink->config.dma_client_id);
+    XvGetPortAttribute (context->disp, context->xv_port_id,
+        prop_atom, &xv_value);
+  }
+  g_mutex_unlock (&context->lock);
+}
+
+static void
+gst_xv_image_sink_disable_dma_client (GstXvImageSink * xvimagesink)
+{
+  GstXvContext *context = xvimagesink->context;
+  Atom prop_atom;
+
+  if (!context->have_dma_client)
+    return;
+
+  g_mutex_lock (&context->lock);
+  prop_atom = XInternAtom (context->disp, XV_DMA_CLIENT_PROP, True);
+  if (prop_atom != None) {
+    XvSetPortAttribute (context->disp, context->xv_port_id, prop_atom, 0);
+  }
+  g_mutex_unlock (&context->lock);
+
+  context->have_dma_client = FALSE;
+}
+
+static gboolean
+gst_xv_image_sink_send_dma_params (GstXvImageSink * xvimagesink,
+    gint hor_stride, gint ver_stride)
+{
+  GstXvContext *context = xvimagesink->context;
+  Atom prop_atom;
+  gboolean error = FALSE;
+
+  if (!context->have_dma_client)
+    return FALSE;
+
+  g_mutex_lock (&context->lock);
+  prop_atom = XInternAtom (context->disp, XV_DMA_HOR_STRIDE_PROP, True);
+  if (prop_atom != None) {
+    XvSetPortAttribute (context->disp, context->xv_port_id,
+        prop_atom, hor_stride);
+  } else {
+    error = TRUE;
+  }
+  prop_atom = XInternAtom (context->disp, XV_DMA_VER_STRIDE_PROP, True);
+  if (prop_atom != None) {
+    XvSetPortAttribute (context->disp, context->xv_port_id,
+        prop_atom, ver_stride);
+  } else {
+    error = TRUE;
+  }
+  g_mutex_unlock (&context->lock);
+
+  if (error == TRUE) {
+    gst_xv_image_sink_disable_dma_client (xvimagesink);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+gst_xv_image_sink_send_dma_fd (GstXvImageSink * xvimagesink, gint dma_fd)
+{
+  GstXvContext *context = xvimagesink->context;
+  struct sockaddr_un addr;
+  struct iovec iov;
+  struct msghdr msg;
+  struct cmsghdr *header;
+  gchar buf[CMSG_SPACE (sizeof (int))];
+  gint socket_fd;
+
+  if (!context->have_dma_client)
+    return FALSE;
+
+  gst_xv_image_sink_flush_dma_client (xvimagesink);
+
+  socket_fd = socket (PF_UNIX, SOCK_DGRAM, 0);
+  if (socket_fd < 0)
+    goto failed;
+
+  addr.sun_family = AF_LOCAL;
+  snprintf (addr.sun_path, sizeof (addr.sun_path),
+      XV_DMA_CLIENT_PATH ".%d", xvimagesink->config.dma_client_id);
+  addr.sun_path[sizeof (addr.sun_path) - 1] = '\0';
+
+  if (connect (socket_fd, (struct sockaddr *) &addr, sizeof (addr)) < 0)
+    goto failed;
+
+  iov.iov_base = buf;
+  iov.iov_len = 1;
+
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+  msg.msg_control = buf;
+  msg.msg_controllen = sizeof (buf);
+  msg.msg_name = NULL;
+  msg.msg_namelen = 0;
+
+  header = CMSG_FIRSTHDR (&msg);
+  header->cmsg_level = SOL_SOCKET;
+  header->cmsg_type = SCM_RIGHTS;
+
+  header->cmsg_len = CMSG_LEN (sizeof (int));
+  *((int *) CMSG_DATA (header)) = dma_fd;
+  sendmsg (socket_fd, &msg, 0);
+
+  /* Send am empty msg at the end */
+  header->cmsg_len = CMSG_LEN (0);
+  sendmsg (socket_fd, &msg, 0);
+
+  close (socket_fd);
+  return TRUE;
+
+failed:
+  gst_xv_image_sink_disable_dma_client (xvimagesink);
+
+  if (socket_fd >= 0)
+    close (socket_fd);
+
+  return FALSE;
+}
 
 /* This function puts a GstXvImage on a GstXvImageSink's window. Returns FALSE
  * if no window was available  */
@@ -274,6 +438,7 @@ gst_xv_image_sink_xvimage_put (GstXvImageSink * xvimagesink,
   }
 
   mem = (GstXvImageMemory *) gst_buffer_peek_memory (xvimage, 0);
+
   gst_xvimage_memory_get_crop (mem, &mem_crop);
 
   crop = gst_buffer_get_video_crop_meta (xvimage);
@@ -305,6 +470,13 @@ gst_xv_image_sink_xvimage_put (GstXvImageSink * xvimagesink,
     result.y += xwindow->render_rect.y;
   } else {
     memcpy (&result, &xwindow->render_rect, sizeof (GstVideoRectangle));
+  }
+
+  if (gst_buffer_n_memory (xvimage) > 1) {
+    GstMemory *dma_mem = gst_buffer_peek_memory (xvimage, 1);
+    gint dma_fd = gst_dmabuf_memory_get_fd (dma_mem);
+    if (dma_fd >= 0)
+      gst_xv_image_sink_send_dma_fd (xvimagesink, dma_fd);
   }
 
   gst_xvimage_memory_render (mem, &src, xwindow, &result, draw_border);
@@ -955,6 +1127,37 @@ gst_xv_image_sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
     if (res != GST_FLOW_OK)
       goto no_buffer;
 
+    mem = gst_buffer_peek_memory (buf, 0);
+    gst_xv_image_sink_check_dma_client (xvimagesink);
+    if (gst_is_dmabuf_memory (mem) && xvimagesink->context->have_dma_client) {
+      GstVideoMeta *vmeta = gst_buffer_get_video_meta (buf);
+      gint hor_stride, ver_stride;
+
+      /* If this buffer is dmabuf and the xserver supports dma_client, we will
+         send the dmabuf fd directly */
+      GST_LOG_OBJECT (xvimagesink, "buffer %p is dmabuf, will send dmabuf fd",
+          buf);
+
+      /* Stash the dmabuf in index 1 */
+      gst_buffer_insert_memory (to_put, 1, gst_buffer_get_memory (buf, 0));
+
+      /* Try to send dmabuf params */
+      if (vmeta) {
+        hor_stride = vmeta->stride[0];
+        ver_stride = vmeta->height;
+
+        if (vmeta->n_planes > 1)
+          ver_stride = vmeta->offset[1] / hor_stride;
+      } else {
+        hor_stride = xvimagesink->info.width;
+        ver_stride = xvimagesink->info.height;
+      }
+
+      if (gst_xv_image_sink_send_dma_params (xvimagesink,
+              hor_stride, ver_stride))
+        goto put_image;
+    }
+
     GST_CAT_LOG_OBJECT (CAT_PERFORMANCE, xvimagesink,
         "slow copy buffer %p into bufferpool buffer %p", buf, to_put);
 
@@ -972,6 +1175,7 @@ gst_xv_image_sink_show_frame (GstVideoSink * vsink, GstBuffer * buf)
     gst_video_frame_unmap (&src);
   }
 
+put_image:
   if (!gst_xv_image_sink_xvimage_put (xvimagesink, to_put))
     goto no_window;
 
@@ -1851,6 +2055,8 @@ gst_xv_image_sink_init (GstXvImageSink * xvimagesink)
   xvimagesink->config.hue = xvimagesink->config.saturation = 0;
   xvimagesink->config.contrast = xvimagesink->config.brightness = 0;
   xvimagesink->config.cb_changed = FALSE;
+
+  xvimagesink->config.dma_client_id = (guint) getpid ();
 
   xvimagesink->context = NULL;
   xvimagesink->xwindow = NULL;
