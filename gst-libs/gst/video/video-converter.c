@@ -37,6 +37,11 @@
 
 #include "video-orc.h"
 
+#ifdef HAVE_RGA
+#include <rga/rga.h>
+#include <rga/RgaApi.h>
+#endif
+
 /**
  * SECTION:videoconverter
  * @title: GstVideoConverter
@@ -2624,6 +2629,169 @@ gst_video_converter_get_config (GstVideoConverter * convert)
   return convert->config;
 }
 
+#ifdef HAVE_RGA
+static RgaSURF_FORMAT
+get_rga_format (GstVideoFormat format)
+{
+  switch (format) {
+    case GST_VIDEO_FORMAT_BGRA:
+    case GST_VIDEO_FORMAT_BGRx:
+      return RK_FORMAT_BGRA_8888;
+    case GST_VIDEO_FORMAT_RGBA:
+      return RK_FORMAT_RGBA_8888;
+    case GST_VIDEO_FORMAT_RGBx:
+      return RK_FORMAT_RGBX_8888;
+    case GST_VIDEO_FORMAT_BGR:
+      return RK_FORMAT_BGR_888;
+    case GST_VIDEO_FORMAT_RGB:
+      return RK_FORMAT_RGB_888;
+    case GST_VIDEO_FORMAT_RGB15:
+      return RK_FORMAT_RGBA_5551;
+    case GST_VIDEO_FORMAT_RGB16:
+      return RK_FORMAT_RGB_565;
+    case GST_VIDEO_FORMAT_NV12:
+      return RK_FORMAT_YCbCr_420_SP;
+    case GST_VIDEO_FORMAT_NV21:
+      return RK_FORMAT_YCrCb_420_SP;
+    case GST_VIDEO_FORMAT_I420:
+      return RK_FORMAT_YCbCr_420_P;
+    case GST_VIDEO_FORMAT_YV12:
+      return RK_FORMAT_YCrCb_420_P;
+    case GST_VIDEO_FORMAT_NV16:
+      return RK_FORMAT_YCbCr_422_SP;
+    case GST_VIDEO_FORMAT_NV61:
+      return RK_FORMAT_YCrCb_422_SP;
+    case GST_VIDEO_FORMAT_Y42B:
+      return RK_FORMAT_YCbCr_422_P;
+    case GST_VIDEO_FORMAT_P010_10LE:
+      return RK_FORMAT_YCbCr_420_SP_10B;
+    default:
+      return RK_FORMAT_UNKNOWN;
+  }
+}
+
+static gboolean
+get_rga_info (const GstVideoFrame * frame, rga_info_t * info,
+    int x, int y, int w, int h)
+{
+  GstVideoMeta *meta = gst_buffer_get_video_meta (frame->buffer);
+  const GstVideoInfo *vinfo = &frame->info;
+  RgaSURF_FORMAT format;
+  gint hstride, vstride0, i;
+  guint8 *ptr;
+
+  memset (info, 0, sizeof (rga_info_t));
+
+  if (!meta)
+    return FALSE;
+
+  hstride = meta->stride[0];
+  vstride0 = meta->n_planes == 1 ? meta->height : meta->offset[1] / hstride;
+
+  /* RGA requires contig buffer */
+  ptr = GST_VIDEO_FRAME_PLANE_DATA (frame, 0);
+  for (i = 1; i < GST_VIDEO_FRAME_N_PLANES (frame); i++) {
+    gint size = GST_VIDEO_FRAME_PLANE_OFFSET (frame, i) -
+        GST_VIDEO_FRAME_PLANE_OFFSET (frame, i - 1);
+    gint vstride = size / meta->stride[i - 1];
+
+    ptr += size;
+    if (ptr != GST_VIDEO_FRAME_PLANE_DATA (frame, i))
+      return FALSE;
+
+    if ((meta->stride[i] != hstride && meta->stride[i] != hstride / 2) ||
+        (vstride != vstride0 && vstride != vstride0 / 2))
+      return FALSE;
+  }
+
+  format = get_rga_format (GST_VIDEO_INFO_FORMAT (vinfo));
+  switch (format) {
+    case RK_FORMAT_RGBX_8888:
+    case RK_FORMAT_RGBA_8888:
+    case RK_FORMAT_BGRA_8888:
+      hstride /= 4;
+      break;
+    case RK_FORMAT_RGB_888:
+    case RK_FORMAT_BGR_888:
+      hstride /= 3;
+      break;
+    case RK_FORMAT_RGBA_5551:
+    case RK_FORMAT_RGB_565:
+      hstride /= 2;
+      break;
+    case RK_FORMAT_YCbCr_420_SP_10B:
+    case RK_FORMAT_YCbCr_422_SP:
+    case RK_FORMAT_YCrCb_422_SP:
+    case RK_FORMAT_YCbCr_422_P:
+    case RK_FORMAT_YCrCb_422_P:
+    case RK_FORMAT_YCbCr_420_SP:
+    case RK_FORMAT_YCrCb_420_SP:
+    case RK_FORMAT_YCbCr_420_P:
+    case RK_FORMAT_YCrCb_420_P:
+      /* RGA requires yuv image rect align to 2 */
+      x = (x + 1) & ~1;
+      y = (y + 1) & ~1;
+      w &= ~1;
+      h &= ~1;
+
+      /* RGA requires yuv image stride align to 8 */
+      if (hstride % 8)
+        return FALSE;
+
+      if (vstride0 % 2)
+        return FALSE;
+      break;
+    default:
+      return FALSE;
+  }
+
+  info->virAddr = GST_VIDEO_FRAME_PLANE_DATA (frame, 0);
+  info->mmuFlag = 1;
+
+  rga_set_rect (&info->rect, x, y, w, h, hstride, vstride0, format);
+  return TRUE;
+}
+
+static gboolean
+video_converter_try_rga (GstVideoConverter * convert,
+    const GstVideoFrame * src, GstVideoFrame * dest)
+{
+  rga_info_t src_info = { 0 };
+  rga_info_t dst_info = { 0 };
+  static int rga_supported = 1;
+  static int rga_inited = 0;
+  const char *buf;
+
+  buf = getenv ("GST_VIDEO_CONVERT_USE_RGA");
+  if (!buf || strcmp (buf, "1"))
+    return FALSE;
+
+  if (!rga_supported)
+    return FALSE;
+
+  if (!rga_inited) {
+    if (c_RkRgaInit () < 0) {
+      rga_supported = 0;
+      return FALSE;
+    }
+    rga_inited = 1;
+  }
+
+  if (!get_rga_info (src, &src_info, convert->in_x, convert->in_y,
+          convert->in_width, convert->in_height))
+    return FALSE;
+
+  if (!get_rga_info (dest, &dst_info, convert->out_x, convert->out_y,
+          convert->out_width, convert->out_height))
+    return FALSE;
+
+  if (c_RkRgaBlit (&src_info, &dst_info, NULL) < 0)
+    return FALSE;
+
+  return TRUE;
+}
+#endif
+
 /**
  * gst_video_converter_frame:
  * @convert: a #GstVideoConverter
@@ -2641,6 +2809,12 @@ gst_video_converter_frame (GstVideoConverter * convert,
   g_return_if_fail (convert != NULL);
   g_return_if_fail (src != NULL);
   g_return_if_fail (dest != NULL);
+
+#ifdef HAVE_RGA
+  /* Accel convert with rockchip RGA */
+  if (video_converter_try_rga (convert, src, dest))
+    return;
+#endif
 
   convert->convert (convert, src, dest);
 }
