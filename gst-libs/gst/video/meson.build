@@ -100,7 +100,7 @@ gstvideo_c = custom_target('gstvideoenum_c',
 video_gen_sources = [gstvideo_h]
 
 orcsrc = 'video-orc'
-gstvideo_deps = [gst_base_dep, libm]
+gstvideo_deps = [gst_base_dep, libm, rga_dep]
 if have_orcc
   gstvideo_deps += [orc_dep]
   orc_h = custom_target(orcsrc + '.h',
