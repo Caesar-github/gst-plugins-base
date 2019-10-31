@@ -295,6 +295,18 @@ GST_PREFIX="`$PKG_CONFIG --variable=prefix gstreamer-$GST_API_VERSION`"
 AC_SUBST(GLIB_PREFIX)
 AC_SUBST(GST_PREFIX)
 
+dnl check for rockchip RGA
+RGA_LIBS=
+RGA_HEADER=
+
+AC_CHECK_LIB([rga], [c_RkRgaInit], RGA_LIBS="-lrga")
+AC_CHECK_HEADERS([rga/RgaApi.h], RGA_HEADER="yes")
+
+if test "x$RGA_LIBS" != "x" && test "x$RGA_HEADER" = "xyes"; then
+  AC_SUBST(RGA_LIBS)
+  AC_DEFINE(HAVE_RGA, 1, [Have rockchip RGA])
+fi
+
 dnl GTK is optional and only used in examples
 HAVE_GTK=no
 HAVE_GTK_X11=no
