@@ -13,7 +13,7 @@ DEB_DH_AUTORECONF_ARGS += --as-needed
 CFLAGS += -Wno-error
 CXXFLAGS += -Wno-error
 LDFLAGS += -Wl,-z,defs -Wl,-O1 -Wl,--as-needed
-DEB_MAKE_CHECK_TARGET = check || true
+# DEB_MAKE_CHECK_TARGET = check || true
 
 # upstream version with epoch
 gst_version := $(shell dpkg-parsechangelog | sed -n 's/Version: //p' | cut -d '-' -f 1)
