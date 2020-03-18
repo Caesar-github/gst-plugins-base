@@ -614,8 +614,8 @@ _gst_egl_image_check_dmabuf_direct (GstGLContext * context, int fourcc,
   gst_eglQueryDmaBufModifiersEXT =
       gst_gl_context_get_proc_address (context, "eglQueryDmaBufModifiersEXT");
 
-  if (!gst_eglQueryDmaBufFormatsEXT || !gst_eglQueryDmaBufModifiersEXT)
-    return FALSE;
+  if (!gst_eglQueryDmaBufFormatsEXT)
+    return TRUE;
 
   display_egl = gst_gl_display_egl_from_gl_display (context->display);
   if (!display_egl) {
@@ -651,6 +651,9 @@ _gst_egl_image_check_dmabuf_direct (GstGLContext * context, int fourcc,
         GST_FOURCC_ARGS (fourcc));
     return FALSE;
   }
+
+  if (!gst_eglQueryDmaBufModifiersEXT)
+    return TRUE;
 
   ret = gst_eglQueryDmaBufModifiersEXT (egl_display, fourcc, 0, NULL, NULL,
       &num_modifiers);
