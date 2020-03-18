@@ -1715,8 +1715,8 @@ static const UploadMethod _directviv_upload = {
 
 static const UploadMethod *upload_methods[] = { &_gl_memory_upload,
 #if GST_GL_HAVE_DMABUF
-  &_direct_dma_buf_upload,
   &_direct_dma_buf_external_upload,
+  &_direct_dma_buf_upload,
   &_dma_buf_upload,
 #endif
 #if GST_GL_HAVE_VIV_DIRECTVIV
