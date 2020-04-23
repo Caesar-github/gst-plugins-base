@@ -248,6 +248,17 @@ if get_option('default_library') == 'static'
   gst_plugins_base_args += ['-DGST_STATIC_COMPILATION']
 endif
 
+# Check for rockchip RGA
+rga_dep = cc.find_library('rga', required : false)
+
+if rga_dep.found() and not cc.has_header_symbol('rga/RgaApi.h', 'c_RkRgaInit')
+  rga_dep = unneeded_dep
+endif
+
+if rga_dep.found()
+  core_conf.set('HAVE_RGA', rga_dep.found())
+endif
+
 # X11 checks are for sys/ and tests/
 x11_dep = dependency('x11', required : get_option('x11'))
 # GLib checks are for the entire project
