@@ -42,6 +42,11 @@
 
 #include <gst/video/video.h>
 
+#define XV_DMA_CLIENT_PROP      "XV_DMA_CLIENT_ID"
+#define XV_DMA_VER_STRIDE_PROP  "XV_DMA_VER_STRIDE"
+#define XV_DMA_HOR_STRIDE_PROP  "XV_DMA_HOR_STRIDE"
+#define XV_DMA_CLIENT_PATH      "/tmp/.xv_dma_client"
+
 G_BEGIN_DECLS
 
 typedef struct _GstXvContextConfig GstXvContextConfig;
@@ -69,6 +74,8 @@ struct _GstXvContextConfig
   gint hue;
   gint saturation;
   gboolean cb_changed;
+
+  guint dma_client_id;
 };
 
 /**
@@ -160,6 +167,7 @@ struct _GstXvContext
   gboolean have_colorkey;
   gboolean have_double_buffer;
   gboolean have_iturbt709;
+  gboolean have_dma_client;
 
   GList *formats_list;
 
